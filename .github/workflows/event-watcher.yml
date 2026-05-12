@@ -1,0 +1,42 @@
+name: Event Warning Watcher
+
+on:
+  schedule:
+    # Every 5 minutes, weekdays, 12:00–22:55 UTC. Covers ~7 AM–6 PM ET across DST.
+    - cron: '*/5 12-22 * * 1-5'
+  workflow_dispatch:
+
+concurrency:
+  group: event-watcher
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore watcher state
+        uses: actions/cache/restore@v4
+        with:
+          path: state/
+          key: watcher-state-${{ github.run_id }}
+          restore-keys: |
+            watcher-state-
+
+      - name: Run watcher
+        shell: pwsh
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          STATE_FILE: ./state/watcher.json
+        run: ./scripts/Watch-Events.ps1
+
+      - name: Save watcher state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: state/
+          key: watcher-state-${{ github.run_id }}
