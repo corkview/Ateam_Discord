@@ -108,7 +108,7 @@ foreach ($e in $todays) {
     if ($e.HasTime) {
         # CSV times are UTC; convert to ET for guaranteed-ET display.
         $etTime = [System.TimeZoneInfo]::ConvertTimeFromUtc($e.EventUtc, $EtZone)
-        $name   = "$emoji $($etTime.ToString('h:mm tt')) ET — $($e.Title)"
+        $name   = "$emoji $($etTime.ToString('h:mm tt')) — $($e.Title)"
     }
     else {
         $name = "$emoji $($e.TimeRaw) — $($e.Title)"
