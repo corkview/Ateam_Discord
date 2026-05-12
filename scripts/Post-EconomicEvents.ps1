@@ -90,7 +90,9 @@ $todays = foreach ($r in $rows) {
 # Sort: timed events by time, all-day/tentative at the end.
 $todays = @($todays | Sort-Object @{Expression = { -not $_.HasTime }}, EventUtc)
 
-# --- Build embed fields ---------------------------------------------
+# --- Build embed description (markdown) -----------------------------
+# Using description instead of fields so events without Forecast/Previous
+# data take a single line — no awkward empty rows.
 function Get-ImpactEmoji([string]$impact) {
     switch ($impact.ToLower()) {
         'high'    { '🔴' }
@@ -101,28 +103,23 @@ function Get-ImpactEmoji([string]$impact) {
     }
 }
 
-$fields = @()
+$lines = @()
 foreach ($e in $todays) {
     $emoji = Get-ImpactEmoji $e.Impact
 
     if ($e.HasTime) {
-        # CSV times are UTC; convert to ET for guaranteed-ET display.
         $etTime = [System.TimeZoneInfo]::ConvertTimeFromUtc($e.EventUtc, $EtZone)
-        $name   = "$emoji $($etTime.ToString('h:mm tt')) — $($e.Title)"
+        $lines += "$emoji **$($etTime.ToString('h:mm tt'))** — $($e.Title)"
     }
     else {
-        $name = "$emoji $($e.TimeRaw) — $($e.Title)"
+        $lines += "$emoji **$($e.TimeRaw)** — $($e.Title)"
     }
 
-    $valueParts = @()
-    if ($e.Forecast) { $valueParts += "Forecast: $($e.Forecast)" }
-    if ($e.Previous) { $valueParts += "Previous: $($e.Previous)" }
-    $value = if ($valueParts.Count) { $valueParts -join ' | ' } else { "`u{200B}" }  # zero-width space (Discord requires non-empty)
-
-    $fields += @{
-        name   = $name
-        value  = $value
-        inline = $false
+    $details = @()
+    if ($e.Forecast) { $details += "Forecast: $($e.Forecast)" }
+    if ($e.Previous) { $details += "Previous: $($e.Previous)" }
+    if ($details.Count) {
+        $lines += "      $($details -join ' | ')"
     }
 }
 
@@ -135,16 +132,13 @@ if ($todays.Count -gt 0) {
     elseif ($impacts -contains 'Low')     { $color = 15844367 }   # yellow
 }
 
-$dayHeader = $NowEt.ToString('dddd, MMM. d')
-$embed = @{
-    title  = "**__ $dayHeader __**"
-    color  = $color
-    fields = $fields
-}
+$dayHeader   = $NowEt.ToString('dddd, MMM. d')
+$description = if ($todays.Count -eq 0) { 'No scheduled economic releases.' } else { $lines -join "`n" }
 
-if ($todays.Count -eq 0) {
-    $embed.description = 'No scheduled economic releases.'
-    $embed.Remove('fields')
+$embed = @{
+    title       = "**__ $dayHeader __**"
+    color       = $color
+    description = $description
 }
 
 # --- Post to Discord -------------------------------------------------
