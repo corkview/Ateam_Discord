@@ -27,16 +27,20 @@ $ErrorActionPreference = 'Stop'
 
 if (-not $WebhookUrl) { throw "DISCORD_WEBHOOK_URL is not set." }
 
+# Dot-source fetchers for actuals (CPI/NFP/FOMC) -------------------
+. (Join-Path $PSScriptRoot 'Fetch-Actuals.ps1')
+
 # Tuning ------------------------------------------------------------
-$WarnWithinSec   = 180   # post a warning if event is within 3 min from now
-$DeleteAfterSec  = 60    # delete the warning 1 min after event passes
+$WarnWithinSec    = 180   # post a warning if event is within 3 min from now
+$DeleteAfterSec   = 60    # delete the warning 1 min after event passes
+$ActualsTimeoutMin = 30   # give up on actual-fetching N min after event time
 
 # Timezone setup (shared across all loop iterations) ---------------
 $EtZone = [System.TimeZoneInfo]::FindSystemTimeZoneById(
     $(if ($IsWindows -or $env:OS -eq 'Windows_NT') { 'Eastern Standard Time' } else { 'America/New_York' })
 )
 
-function New-EmptyState { @{ date = $null; events = @(); warnings = @() } }
+function New-EmptyState { @{ date = $null; events = @(); warnings = @(); actuals = @() } }
 function Get-EventKey($title, $eventUtcIso) { "$title|$eventUtcIso" }
 
 function Invoke-WatcherTick {
@@ -60,6 +64,15 @@ function Invoke-WatcherTick {
                 })
                 warnings    = @($loaded.warnings | ForEach-Object {
                     @{ event_key = [string]$_.event_key; message_id = [string]$_.message_id; deleted = [bool]$_.deleted }
+                })
+                actuals     = @($loaded.actuals | ForEach-Object {
+                    $feUtc = if ($_.first_event_utc -is [datetime]) { $_.first_event_utc.ToUniversalTime().ToString('o') } else { [string]$_.first_event_utc }
+                    @{
+                        group           = [string]$_.group
+                        fetcher         = [string]$_.fetcher
+                        first_event_utc = $feUtc
+                        status          = [string]$_.status
+                    }
                 })
             }
         }
@@ -109,6 +122,7 @@ function Invoke-WatcherTick {
         $state.include_all = $includeAll
         $state.events      = $events
         $state.warnings    = @()
+        $state.actuals     = @()
         $mode = if ($includeAll) { 'ALL impacts' } else { 'Med/High' }
         Write-Host "[$($nowEt.ToString('HH:mm:ss'))] Today has $($events.Count) USD event(s) ($mode)."
     }
@@ -153,6 +167,57 @@ function Invoke-WatcherTick {
                     Write-Warning "Delete failed for $($e.title): $_"
                 }
                 $warning.deleted = $true
+
+                # Enroll for actuals follow-up if this event is in the registry.
+                $entry = Find-ActualEntry $e.title
+                if ($entry) {
+                    $existing = $state.actuals | Where-Object { $_.group -eq $entry.Group } | Select-Object -First 1
+                    if (-not $existing) {
+                        $state.actuals += @{
+                            group           = $entry.Group
+                            fetcher         = $entry.Fetcher
+                            first_event_utc = $e.event_utc
+                            status          = 'pending'
+                        }
+                        Write-Host "[$($nowEt.ToString('HH:mm:ss'))] Enrolled $($entry.Group) for actuals follow-up."
+                    }
+                }
+            }
+        }
+    }
+
+    # --- Process pending actuals ---
+    foreach ($a in $state.actuals) {
+        if ($a.status -ne 'pending') { continue }
+
+        $firstEvent  = [datetime]::Parse($a.first_event_utc, [cultureinfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind)
+        $minSinceEvt = ($nowUtc - $firstEvent).TotalMinutes
+
+        if ($minSinceEvt -gt $ActualsTimeoutMin) {
+            $a.status = 'timeout'
+            Write-Host "[$($nowEt.ToString('HH:mm:ss'))] Actuals timeout for $($a.group) ($([int]$minSinceEvt) min)."
+            continue
+        }
+
+        $result = $null
+        try   { $result = & $a.fetcher }
+        catch { Write-Warning "Actuals fetcher '$($a.fetcher)' failed: $_"; continue }
+
+        if ($result) {
+            $content = "$($result.Emoji) **$($result.Group) Release — $($result.PeriodLabel)**`n" + ($result.Lines -join "`n")
+            $payload = @{
+                content          = $content
+                allowed_mentions = @{ parse = @() }
+            } | ConvertTo-Json -Depth 5 -Compress
+
+            try {
+                Invoke-RestMethod -Uri $WebhookUrl -Method Post `
+                    -ContentType 'application/json; charset=utf-8' -Body $payload | Out-Null
+                $a.status = 'posted'
+                Write-Host "[$($nowEt.ToString('HH:mm:ss'))] Posted actuals: $($a.group) — $($result.PeriodLabel)"
+            }
+            catch {
+                Write-Warning "Failed to post actuals to Discord: $_"
             }
         }
     }
