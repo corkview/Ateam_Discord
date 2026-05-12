@@ -121,7 +121,6 @@ foreach ($e in $todays) {
     if ($details.Count) {
         $lines += "      $($details -join ' | ')"
     }
-    $lines += "-# `u{200E}"   # smaller-height spacer between events (subtext + LRM)
 }
 
 # --- Embed color by highest impact ----------------------------------
