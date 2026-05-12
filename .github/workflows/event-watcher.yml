@@ -1,14 +1,26 @@
 name: Event Warning Watcher
 
+# Long-running per-minute watcher. Two daily shifts cover ~11 hours of trading;
+# GH Actions caps individual jobs at 6 hours so we split. Public repo = unlimited
+# Actions minutes. State (events + warning message IDs) is handed off between
+# shifts via Actions cache.
+
 on:
   schedule:
-    # Every 5 minutes, weekdays, 12:00–22:55 UTC. Covers ~7 AM–6 PM ET across DST.
-    - cron: '*/5 12-22 * * 1-5'
+    # Morning shift: starts 12:00 UTC = 8 AM EDT / 7 AM EST
+    - cron: '0 12 * * 1-5'
+    # Afternoon shift: starts 17:30 UTC = 1:30 PM EDT / 12:30 PM EST
+    - cron: '30 17 * * 1-5'
   workflow_dispatch:
+    inputs:
+      loop_minutes:
+        description: 'Loop duration in minutes (0 = single check)'
+        required: false
+        default: '0'
 
 concurrency:
   group: event-watcher
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -16,6 +28,7 @@ permissions:
 jobs:
   watch:
     runs-on: ubuntu-latest
+    timeout-minutes: 330   # 5.5 hours; ends before the 6 hr GH cap
     steps:
       - uses: actions/checkout@v4
 
@@ -27,11 +40,13 @@ jobs:
           restore-keys: |
             watcher-state-
 
-      - name: Run watcher
+      - name: Run watcher loop
         shell: pwsh
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           STATE_FILE: ./state/watcher.json
+          # Scheduled runs loop for ~5.5 hr. Manual runs use the input (default 0 = single check).
+          LOOP_DURATION_MINUTES: ${{ github.event_name == 'schedule' && '325' || inputs.loop_minutes }}
         run: ./scripts/Watch-Events.ps1
 
       - name: Save watcher state
