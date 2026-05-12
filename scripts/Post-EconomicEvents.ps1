@@ -107,10 +107,8 @@ foreach ($e in $todays) {
 
     if ($e.HasTime) {
         # CSV times are UTC; convert to ET for guaranteed-ET display.
-        # Keep <t:UNIX:R> for the auto-updating countdown.
         $etTime = [System.TimeZoneInfo]::ConvertTimeFromUtc($e.EventUtc, $EtZone)
-        $unix   = [int64]([datetimeoffset]$e.EventUtc).ToUnixTimeSeconds()
-        $name   = "$emoji $($etTime.ToString('h:mm tt')) ET (<t:$unix`:R>) — $($e.Title)"
+        $name   = "$emoji $($etTime.ToString('h:mm tt')) ET — $($e.Title)"
     }
     else {
         $name = "$emoji $($e.TimeRaw) — $($e.Title)"
