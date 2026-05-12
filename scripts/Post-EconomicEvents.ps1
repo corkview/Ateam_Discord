@@ -39,6 +39,16 @@ $EtZone = [System.TimeZoneInfo]::FindSystemTimeZoneById(
 $NowEt   = [System.TimeZoneInfo]::ConvertTimeFromUtc([datetime]::UtcNow, $EtZone)
 $TodayEt = $NowEt.Date
 
+# --- Cron gating: only one of the two UTC crons should fire at 8 AM ET ---
+# Set via workflow env when triggered by schedule; empty on manual runs.
+$enforceEtHour = $env:ENFORCE_ET_HOUR
+if ($enforceEtHour) {
+    if ($NowEt.Hour -ne [int]$enforceEtHour) {
+        Write-Host ("Cron fired at ET {0}; expected hour {1}. Skipping (the other cron will handle today's post)." -f $NowEt.ToString('HH:mm'), $enforceEtHour)
+        return
+    }
+}
+
 # --- Download CSV ----------------------------------------------------
 Write-Host "Fetching $CsvUrl"
 $csvText = Invoke-RestMethod -Uri $CsvUrl -Method Get

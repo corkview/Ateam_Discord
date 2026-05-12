@@ -2,10 +2,11 @@ name: Daily Economic Events to Discord
 
 on:
   schedule:
-    # GitHub cron is UTC and runner cron has 1–15 min jitter.
-    # 11:00 UTC = 6:00 AM EST / 7:00 AM EDT — drifts one hour seasonally.
-    - cron: '0 11 * * 1-5'
-  workflow_dispatch:           # manual trigger from the Actions tab
+    # 8:05 AM ET year-round, Mon-Fri. GitHub cron is UTC and DST-blind, so
+    # both regimes are listed and the script gates on the current ET hour.
+    - cron: '5 12 * * 1-5'   # 8:05 AM EDT (Mar–Nov) / 7:05 AM EST (skipped by gate)
+    - cron: '5 13 * * 1-5'   # 8:05 AM EST (Nov–Mar) / 9:05 AM EDT (skipped by gate)
+  workflow_dispatch:           # manual trigger always runs
 
 jobs:
   post:
@@ -17,4 +18,6 @@ jobs:
         shell: pwsh
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          # Gate cron-triggered runs to 8 AM ET; manual runs skip the gate.
+          ENFORCE_ET_HOUR: ${{ github.event_name == 'schedule' && '8' || '' }}
         run: ./scripts/Post-EconomicEvents.ps1
