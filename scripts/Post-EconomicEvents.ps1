@@ -90,9 +90,7 @@ $todays = foreach ($r in $rows) {
 # Sort: timed events by time, all-day/tentative at the end.
 $todays = @($todays | Sort-Object @{Expression = { -not $_.HasTime }}, EventUtc)
 
-# --- Build embed description (markdown) -----------------------------
-# Using description instead of fields so events without Forecast/Previous
-# data take a single line — no awkward empty rows.
+# --- Build embed fields (matches original Windows script layout) ----
 function Get-ImpactEmoji([string]$impact) {
     switch ($impact.ToLower()) {
         'high'    { '🔴' }
@@ -103,7 +101,7 @@ function Get-ImpactEmoji([string]$impact) {
     }
 }
 
-$lines = @()
+$fields = @()
 foreach ($e in $todays) {
     $emoji = Get-ImpactEmoji $e.Impact
 
@@ -115,12 +113,16 @@ foreach ($e in $todays) {
         $timeStr = $e.TimeRaw
     }
 
-    $details = @()
-    if ($e.Forecast) { $details += "F: $($e.Forecast)" }
-    if ($e.Previous) { $details += "P: $($e.Previous)" }
-    $tail = if ($details.Count) { '  ·  ' + ($details -join ' | ') } else { '' }
+    $valueParts = @()
+    if ($e.Forecast) { $valueParts += "Forecast: $($e.Forecast)" }
+    if ($e.Previous) { $valueParts += "Previous: $($e.Previous)" }
+    $value = $valueParts -join ' | '   # empty string when no data — Discord renders with minimal gap
 
-    $lines += "$emoji **$timeStr** — $($e.Title)$tail"
+    $fields += @{
+        name   = "$emoji $timeStr — $($e.Title)"
+        value  = $value
+        inline = $false
+    }
 }
 
 # --- Embed color by highest impact ----------------------------------
@@ -132,13 +134,16 @@ if ($todays.Count -gt 0) {
     elseif ($impacts -contains 'Low')     { $color = 15844367 }   # yellow
 }
 
-$dayHeader   = $NowEt.ToString('dddd, MMM. d')
-$description = if ($todays.Count -eq 0) { 'No scheduled economic releases.' } else { $lines -join "`n" }
-
+$dayHeader = $NowEt.ToString('dddd, MMM. d')
 $embed = @{
-    title       = "**__ $dayHeader __**"
-    color       = $color
-    description = $description
+    title  = "**__ $dayHeader __**"
+    color  = $color
+    fields = $fields
+}
+
+if ($todays.Count -eq 0) {
+    $embed.description = 'No scheduled economic releases.'
+    $embed.Remove('fields')
 }
 
 # --- Post to Discord -------------------------------------------------
