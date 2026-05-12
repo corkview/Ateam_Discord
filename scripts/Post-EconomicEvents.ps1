@@ -121,6 +121,7 @@ foreach ($e in $todays) {
     if ($details.Count) {
         $lines += "      $($details -join ' | ')"
     }
+    $lines += ''   # blank line between events
 }
 
 # --- Embed color by highest impact ----------------------------------
