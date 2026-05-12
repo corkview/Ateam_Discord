@@ -44,18 +44,21 @@ function Invoke-WatcherTick {
     $nowEt   = [System.TimeZoneInfo]::ConvertTimeFromUtc($nowUtc, $EtZone)
     $todayEt = $nowEt.Date.ToString('yyyy-MM-dd')
 
+    $includeAll = ($env:INCLUDE_ALL_IMPACTS -eq 'true')
+
     # --- Load state ---
     $state = New-EmptyState
     if (Test-Path $StateFile) {
         try {
             $loaded = Get-Content $StateFile -Raw | ConvertFrom-Json
             $state = @{
-                date     = [string]$loaded.date
-                events   = @($loaded.events   | ForEach-Object {
+                date        = [string]$loaded.date
+                include_all = [bool]$loaded.include_all
+                events      = @($loaded.events   | ForEach-Object {
                     $utcStr = if ($_.event_utc -is [datetime]) { $_.event_utc.ToUniversalTime().ToString('o') } else { [string]$_.event_utc }
                     @{ title = [string]$_.title; impact = [string]$_.impact; event_utc = $utcStr }
                 })
-                warnings = @($loaded.warnings | ForEach-Object {
+                warnings    = @($loaded.warnings | ForEach-Object {
                     @{ event_key = [string]$_.event_key; message_id = [string]$_.message_id; deleted = [bool]$_.deleted }
                 })
             }
@@ -66,8 +69,8 @@ function Invoke-WatcherTick {
         }
     }
 
-    # --- Refresh event list on new day ---
-    if ($state.date -ne $todayEt) {
+    # --- Refresh event list on new day or when filter mode changes ---
+    if ($state.date -ne $todayEt -or $state.include_all -ne $includeAll) {
         Write-Host "[$($nowEt.ToString('HH:mm:ss'))] New day ($($state.date) -> $todayEt); fetching FF CSV."
         $csvText = Invoke-RestMethod -Uri $CsvUrl
         $rows    = $csvText | ConvertFrom-Csv
@@ -75,7 +78,7 @@ function Invoke-WatcherTick {
         $events = @()
         foreach ($r in $rows) {
             if ($r.Country -ne $Country) { continue }
-            if ($r.Impact -ne 'High' -and $r.Impact -ne 'Medium') { continue }
+            if (-not $includeAll -and $r.Impact -ne 'High' -and $r.Impact -ne 'Medium') { continue }
 
             $eventDate = [datetime]::MinValue
             if (-not [datetime]::TryParseExact(
@@ -102,10 +105,12 @@ function Invoke-WatcherTick {
             $events += @{ title = $r.Title; impact = $r.Impact; event_utc = $eventUtc.ToString('o') }
         }
 
-        $state.date     = $todayEt
-        $state.events   = $events
-        $state.warnings = @()
-        Write-Host "[$($nowEt.ToString('HH:mm:ss'))] Today has $($events.Count) USD Med/High event(s)."
+        $state.date        = $todayEt
+        $state.include_all = $includeAll
+        $state.events      = $events
+        $state.warnings    = @()
+        $mode = if ($includeAll) { 'ALL impacts' } else { 'Med/High' }
+        Write-Host "[$($nowEt.ToString('HH:mm:ss'))] Today has $($events.Count) USD event(s) ($mode)."
     }
 
     # --- Walk events; decide post / delete / skip ---
