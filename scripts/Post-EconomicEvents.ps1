@@ -108,19 +108,19 @@ foreach ($e in $todays) {
     $emoji = Get-ImpactEmoji $e.Impact
 
     if ($e.HasTime) {
-        $etTime = [System.TimeZoneInfo]::ConvertTimeFromUtc($e.EventUtc, $EtZone)
-        $lines += "$emoji **$($etTime.ToString('h:mm tt'))** — $($e.Title)"
+        $etTime  = [System.TimeZoneInfo]::ConvertTimeFromUtc($e.EventUtc, $EtZone)
+        $timeStr = $etTime.ToString('h:mm tt')
     }
     else {
-        $lines += "$emoji **$($e.TimeRaw)** — $($e.Title)"
+        $timeStr = $e.TimeRaw
     }
 
     $details = @()
-    if ($e.Forecast) { $details += "Forecast: $($e.Forecast)" }
-    if ($e.Previous) { $details += "Previous: $($e.Previous)" }
-    if ($details.Count) {
-        $lines += "      $($details -join ' | ')"
-    }
+    if ($e.Forecast) { $details += "F: $($e.Forecast)" }
+    if ($e.Previous) { $details += "P: $($e.Previous)" }
+    $tail = if ($details.Count) { '  ·  ' + ($details -join ' | ') } else { '' }
+
+    $lines += "$emoji **$timeStr** — $($e.Title)$tail"
 }
 
 # --- Embed color by highest impact ----------------------------------
