@@ -35,6 +35,12 @@ $WarnWithinSec    = 180   # post a warning if event is within 3 min from now
 $DeleteAfterSec   = 60    # delete the warning 1 min after event passes
 $ActualsTimeoutMin = 30   # give up on actual-fetching N min after event time
 
+# Low-impact events you still want warnings for (case-insensitive regex, match against FF Title).
+# Add more patterns here over time — e.g. 'Natural Gas Storage', 'EIA Petroleum'.
+$AlwaysIncludeTitles = @(
+    'Crude Oil Inventories'
+)
+
 # Timezone setup (shared across all loop iterations) ---------------
 $EtZone = [System.TimeZoneInfo]::FindSystemTimeZoneById(
     $(if ($IsWindows -or $env:OS -eq 'Windows_NT') { 'Eastern Standard Time' } else { 'America/New_York' })
@@ -88,10 +94,15 @@ function Invoke-WatcherTick {
         $csvText = Invoke-RestMethod -Uri $CsvUrl
         $rows    = $csvText | ConvertFrom-Csv
 
+        # Build a single regex from the whitelist for fast matching.
+        $whitelistRegex = if ($AlwaysIncludeTitles.Count) { '(?i)' + ($AlwaysIncludeTitles -join '|') } else { $null }
+
         $events = @()
         foreach ($r in $rows) {
             if ($r.Country -ne $Country) { continue }
-            if (-not $includeAll -and $r.Impact -ne 'High' -and $r.Impact -ne 'Medium') { continue }
+            $isMedHigh     = ($r.Impact -eq 'High' -or $r.Impact -eq 'Medium')
+            $isWhitelisted = $whitelistRegex -and ($r.Title -match $whitelistRegex)
+            if (-not $includeAll -and -not $isMedHigh -and -not $isWhitelisted) { continue }
 
             $eventDate = [datetime]::MinValue
             if (-not [datetime]::TryParseExact(
