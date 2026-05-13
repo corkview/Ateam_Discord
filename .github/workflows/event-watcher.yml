@@ -24,6 +24,10 @@ on:
         description: 'Include Low/Holiday events too (testing)'
         required: false
         default: 'false'
+      force_refresh:
+        description: 'Force a fresh CSV fetch (ignore cached event list)'
+        required: false
+        default: 'false'
 
 concurrency:
   group: event-watcher
@@ -55,6 +59,7 @@ jobs:
           # Scheduled / dispatched runs loop for ~5.5 hr. Manual runs use the input (default 0).
           LOOP_DURATION_MINUTES: ${{ (github.event_name == 'schedule' || github.event_name == 'repository_dispatch') && '325' || inputs.loop_minutes }}
           INCLUDE_ALL_IMPACTS:   ${{ inputs.include_all_impacts || 'false' }}
+          FORCE_REFRESH:         ${{ inputs.force_refresh || 'false' }}
         run: ./scripts/Watch-Events.ps1
 
       - name: Save watcher state

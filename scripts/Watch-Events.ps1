@@ -88,8 +88,9 @@ function Invoke-WatcherTick {
         }
     }
 
-    # --- Refresh event list on new day or when filter mode changes ---
-    if ($state.date -ne $todayEt -or $state.include_all -ne $includeAll) {
+    # --- Refresh event list on new day, filter-mode change, or forced refresh ---
+    $forceRefresh = ($env:FORCE_REFRESH -eq 'true')
+    if ($state.date -ne $todayEt -or $state.include_all -ne $includeAll -or $forceRefresh) {
         Write-Host "[$($nowEt.ToString('HH:mm:ss'))] New day ($($state.date) -> $todayEt); fetching FF CSV."
         $csvText = Invoke-RestMethod -Uri $CsvUrl
         $rows    = $csvText | ConvertFrom-Csv
