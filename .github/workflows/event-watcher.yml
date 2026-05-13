@@ -6,11 +6,14 @@ name: Event Warning Watcher
 # shifts via Actions cache.
 
 on:
+  # Primary trigger: external scheduler (Cloudflare Worker) fires
+  # repository_dispatch "watcher-shift" twice daily at exact times.
+  repository_dispatch:
+    types: [watcher-shift]
+  # Fallback schedule (GitHub cron — less reliable but covers Cloudflare outages):
   schedule:
-    # Morning shift: starts 12:00 UTC = 8 AM EDT / 7 AM EST
-    - cron: '0 12 * * 1-5'
-    # Afternoon shift: starts 17:30 UTC = 1:30 PM EDT / 12:30 PM EST
-    - cron: '30 17 * * 1-5'
+    - cron: '0 12 * * 1-5'     # morning shift
+    - cron: '30 17 * * 1-5'    # afternoon shift
   workflow_dispatch:
     inputs:
       loop_minutes:
@@ -49,8 +52,8 @@ jobs:
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           STATE_FILE: ./state/watcher.json
-          # Scheduled runs loop for ~5.5 hr. Manual runs use the input (default 0 = single check).
-          LOOP_DURATION_MINUTES: ${{ github.event_name == 'schedule' && '325' || inputs.loop_minutes }}
+          # Scheduled / dispatched runs loop for ~5.5 hr. Manual runs use the input (default 0).
+          LOOP_DURATION_MINUTES: ${{ (github.event_name == 'schedule' || github.event_name == 'repository_dispatch') && '325' || inputs.loop_minutes }}
           INCLUDE_ALL_IMPACTS:   ${{ inputs.include_all_impacts || 'false' }}
         run: ./scripts/Watch-Events.ps1
 

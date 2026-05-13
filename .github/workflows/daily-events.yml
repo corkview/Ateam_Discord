@@ -1,12 +1,16 @@
 name: Daily Economic Events to Discord
 
 on:
+  # Primary trigger: external scheduler (Cloudflare Worker) calls
+  # repository_dispatch with event_type "daily-post" at exactly 8:05 AM ET.
+  repository_dispatch:
+    types: [daily-post]
+  # Fallback: GitHub cron (less reliable, but covers Cloudflare outages).
+  # The script's ET-hour-8 gate keeps these from double-posting.
   schedule:
-    # 8:05 AM ET year-round, Mon-Fri. GitHub cron is UTC and DST-blind, so
-    # both regimes are listed and the script gates on the current ET hour.
-    - cron: '5 12 * * 1-5'   # 8:05 AM EDT (Mar–Nov) / 7:05 AM EST (skipped by gate)
-    - cron: '5 13 * * 1-5'   # 8:05 AM EST (Nov–Mar) / 9:05 AM EDT (skipped by gate)
-  workflow_dispatch:           # manual trigger always runs
+    - cron: '5 12 * * 1-5'   # 8:05 AM EDT (Mar–Nov)
+    - cron: '5 13 * * 1-5'   # 8:05 AM EST (Nov–Mar)
+  workflow_dispatch:
 
 jobs:
   post:
@@ -18,6 +22,6 @@ jobs:
         shell: pwsh
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          # Gate cron-triggered runs to 8 AM ET; manual runs skip the gate.
-          ENFORCE_ET_HOUR: ${{ github.event_name == 'schedule' && '8' || '' }}
+          # Gate scheduled / dispatched runs to 8 AM ET; manual runs skip the gate.
+          ENFORCE_ET_HOUR: ${{ (github.event_name == 'schedule' || github.event_name == 'repository_dispatch') && '8' || '' }}
         run: ./scripts/Post-EconomicEvents.ps1
