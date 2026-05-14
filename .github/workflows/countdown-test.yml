@@ -10,6 +10,8 @@ on:
         description: 'Post a countdown ending N seconds from now (try 90)'
         required: false
         default: '90'
+  repository_dispatch:
+    types: [countdown-test]
 
 jobs:
   post:
@@ -19,7 +21,7 @@ jobs:
         shell: pwsh
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          SECONDS_FROM_NOW: ${{ inputs.seconds_from_now }}
+          SECONDS_FROM_NOW: ${{ inputs.seconds_from_now || github.event.client_payload.seconds || '90' }}
         run: |
           $seconds = [int]$env:SECONDS_FROM_NOW
           $target  = [datetime]::UtcNow.AddSeconds($seconds)
