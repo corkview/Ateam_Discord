@@ -1,0 +1,38 @@
+name: Countdown Test
+
+# One-off test to see how Discord renders <t:UNIX:R> as the target time approaches.
+# Posts a message with a relative timestamp N seconds in the future and watches it count down.
+
+on:
+  workflow_dispatch:
+    inputs:
+      seconds_from_now:
+        description: 'Post a countdown ending N seconds from now (try 90)'
+        required: false
+        default: '90'
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post countdown to Discord
+        shell: pwsh
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          SECONDS_FROM_NOW: ${{ inputs.seconds_from_now }}
+        run: |
+          $seconds = [int]$env:SECONDS_FROM_NOW
+          $target  = [datetime]::UtcNow.AddSeconds($seconds)
+          $unix    = [int64]([datetimeoffset]$target).ToUnixTimeSeconds()
+
+          $payload = @{
+            content = ":alarm_clock: **Countdown test** — ends <t:$unix`:R>  (target time: <t:$unix`:T>)`nWatch the line above for ~$seconds seconds and see whether it ticks smoothly under 1 min."
+            allowed_mentions = @{ parse = @() }
+          } | ConvertTo-Json -Depth 5 -Compress
+
+          Invoke-RestMethod -Uri $env:DISCORD_WEBHOOK_URL `
+            -Method Post `
+            -ContentType 'application/json; charset=utf-8' `
+            -Body $payload | Out-Null
+
+          Write-Host "Posted countdown ending at $($target.ToString('o')) (unix $unix)"
