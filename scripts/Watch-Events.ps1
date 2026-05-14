@@ -131,10 +131,13 @@ function Invoke-WatcherTick {
         }
 
         # --- Inject synthetic market session events (always included, regardless of impact filter) ---
-        $marketOpenEt  = $nowEt.Date.AddHours(9).AddMinutes(30)
-        $marketOpenUtc = [System.TimeZoneInfo]::ConvertTimeToUtc(
-            [datetime]::SpecifyKind($marketOpenEt, [DateTimeKind]::Unspecified), $EtZone)
-        $events += @{ title = 'US Market Open'; impact = 'MarketSession'; event_utc = $marketOpenUtc.ToString('o') }
+        function _ToUtcIso([datetime]$etTime, $zone) {
+            [System.TimeZoneInfo]::ConvertTimeToUtc(
+                [datetime]::SpecifyKind($etTime, [DateTimeKind]::Unspecified), $zone).ToString('o')
+        }
+        $events += @{ title = 'US Market Open';  impact = 'MarketSession'; event_utc = (_ToUtcIso $nowEt.Date.AddHours(9).AddMinutes(30)  $EtZone) }
+        $events += @{ title = 'MOC Imbalance';   impact = 'MarketSession'; event_utc = (_ToUtcIso $nowEt.Date.AddHours(15).AddMinutes(50) $EtZone) }
+        $events += @{ title = 'US Market Close'; impact = 'MarketSession'; event_utc = (_ToUtcIso $nowEt.Date.AddHours(16)                $EtZone) }
 
         $state.date        = $todayEt
         $state.include_all = $includeAll
@@ -156,10 +159,17 @@ function Invoke-WatcherTick {
             if ($secsUntil -gt 0 -and $secsUntil -le $WarnWithinSec) {
                 $unix    = [int64]([datetimeoffset]$eventUtc).ToUnixTimeSeconds()
                 $dot = switch ($e.impact) {
-                    'High'           { ':red_circle:' }
-                    'Medium'         { ':orange_circle:' }
-                    'MarketSession'  { ':bell:' }
-                    default          { ':yellow_circle:' }
+                    'High'    { ':red_circle:' }
+                    'Medium'  { ':orange_circle:' }
+                    'MarketSession' {
+                        switch -Regex ($e.title) {
+                            'Open'  { ':bell:' }
+                            'MOC'   { ':alarm_clock:' }
+                            'Close' { ':no_bell:' }
+                            default { ':bell:' }
+                        }
+                    }
+                    default   { ':yellow_circle:' }
                 }
                 $content = if ($e.impact -eq 'MarketSession') {
                     "$dot **$($e.title)** <t:$unix`:R>"
