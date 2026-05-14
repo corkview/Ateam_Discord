@@ -130,6 +130,12 @@ function Invoke-WatcherTick {
             $events += @{ title = $r.Title; impact = $r.Impact; event_utc = $eventUtc.ToString('o') }
         }
 
+        # --- Inject synthetic market session events (always included, regardless of impact filter) ---
+        $marketOpenEt  = $nowEt.Date.AddHours(9).AddMinutes(30)
+        $marketOpenUtc = [System.TimeZoneInfo]::ConvertTimeToUtc(
+            [datetime]::SpecifyKind($marketOpenEt, [DateTimeKind]::Unspecified), $EtZone)
+        $events += @{ title = 'US Market Open'; impact = 'MarketSession'; event_utc = $marketOpenUtc.ToString('o') }
+
         $state.date        = $todayEt
         $state.include_all = $includeAll
         $state.events      = $events
@@ -149,8 +155,17 @@ function Invoke-WatcherTick {
         if (-not $warning) {
             if ($secsUntil -gt 0 -and $secsUntil -le $WarnWithinSec) {
                 $unix    = [int64]([datetimeoffset]$eventUtc).ToUnixTimeSeconds()
-                $dot     = if ($e.impact -eq 'High') { ':red_circle:' } else { ':orange_circle:' }
-                $content = "$dot **$($e.title)** releases <t:$unix`:R>"
+                $dot = switch ($e.impact) {
+                    'High'           { ':red_circle:' }
+                    'Medium'         { ':orange_circle:' }
+                    'MarketSession'  { ':bell:' }
+                    default          { ':yellow_circle:' }
+                }
+                $content = if ($e.impact -eq 'MarketSession') {
+                    "$dot **$($e.title)** <t:$unix`:R>"
+                } else {
+                    "$dot **$($e.title)** releases <t:$unix`:R>"
+                }
 
                 $payload = @{
                     content          = $content
