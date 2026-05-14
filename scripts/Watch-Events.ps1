@@ -165,7 +165,7 @@ function Invoke-WatcherTick {
                         switch -Regex ($e.title) {
                             'Open'  { ':bell:' }
                             'MOC'   { ':alarm_clock:' }
-                            'Close' { ':no_bell:' }
+                            'Close' { ':bell:' }
                             default { ':bell:' }
                         }
                     }
