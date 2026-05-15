@@ -18,7 +18,8 @@
 param(
     [string]$WebhookUrl = $env:DISCORD_WEBHOOK_URL,
     [string]$CsvUrl     = 'https://nfs.faireconomy.media/ff_calendar_thisweek.csv',
-    [string]$Country    = 'USD'
+    [string]$Country    = 'USD',
+    [string]$StateFile  = $(if ($env:STATE_FILE) { $env:STATE_FILE } else { './state/daily-post.json' })
 )
 
 $ErrorActionPreference = 'Stop'
@@ -39,14 +40,22 @@ $EtZone = [System.TimeZoneInfo]::FindSystemTimeZoneById(
 $NowEt   = [System.TimeZoneInfo]::ConvertTimeFromUtc([datetime]::UtcNow, $EtZone)
 $TodayEt = $NowEt.Date
 
-# --- Cron gating: only one of the two UTC crons should fire at 8 AM ET ---
-# Set via workflow env when triggered by schedule; empty on manual runs.
-$enforceEtHour = $env:ENFORCE_ET_HOUR
-if ($enforceEtHour) {
-    if ($NowEt.Hour -ne [int]$enforceEtHour) {
-        Write-Host ("Cron fired at ET {0}; expected hour {1}. Skipping (the other cron will handle today's post)." -f $NowEt.ToString('HH:mm'), $enforceEtHour)
-        return
-    }
+# --- Dedup: skip if we already posted today ---
+# Multiple schedulers (GH cron + Cloudflare) may both fire today, and either
+# may execute late. We post on the first to land and skip subsequent triggers.
+# FORCE_POST=true bypasses this (manual override).
+$todayEtKey = $TodayEt.ToString('yyyy-MM-dd')
+$forcePost  = ($env:FORCE_POST -eq 'true')
+$lastPosted = $null
+if (Test-Path $StateFile) {
+    try {
+        $loaded = Get-Content $StateFile -Raw | ConvertFrom-Json
+        $lastPosted = [string]$loaded.last_posted_date
+    } catch {}
+}
+if (-not $forcePost -and $lastPosted -eq $todayEtKey) {
+    Write-Host "Already posted today ($todayEtKey). Skipping (set FORCE_POST=true to override)."
+    return
 }
 
 # --- Download CSV ----------------------------------------------------
@@ -166,5 +175,12 @@ Invoke-RestMethod -Uri $WebhookUrl `
                   -Method Post `
                   -ContentType 'application/json; charset=utf-8' `
                   -Body $payload | Out-Null
+
+# Mark today as posted so subsequent triggers today skip.
+$stateDir = Split-Path $StateFile -Parent
+if ($stateDir -and -not (Test-Path $stateDir)) {
+    New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
+}
+@{ last_posted_date = $todayEtKey } | ConvertTo-Json | Out-File -FilePath $StateFile -Encoding utf8 -Force
 
 Write-Host ("Posted {0} USD event(s) for {1}." -f $todays.Count, $TodayEt.ToString('yyyy-MM-dd'))

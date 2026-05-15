@@ -5,12 +5,24 @@ on:
   # repository_dispatch with event_type "daily-post" at exactly 8:05 AM ET.
   repository_dispatch:
     types: [daily-post]
-  # Fallback: GitHub cron (less reliable, but covers Cloudflare outages).
-  # The script's ET-hour-8 gate keeps these from double-posting.
+  # Fallback: GitHub cron. Less reliable, but covers Cloudflare outages.
+  # Both daily-post crons may fire; the script dedups via cache state.
   schedule:
     - cron: '5 12 * * 1-5'   # 8:05 AM EDT (Mar–Nov)
     - cron: '5 13 * * 1-5'   # 8:05 AM EST (Nov–Mar)
   workflow_dispatch:
+    inputs:
+      force_post:
+        description: 'Force a post even if already posted today'
+        required: false
+        default: 'true'
+
+concurrency:
+  group: daily-post
+  cancel-in-progress: false
+
+permissions:
+  contents: read
 
 jobs:
   post:
@@ -18,10 +30,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Restore daily-post state
+        uses: actions/cache/restore@v4
+        with:
+          path: state/
+          key: daily-post-state-${{ github.run_id }}
+          restore-keys: |
+            daily-post-state-
+
       - name: Post events to Discord
         shell: pwsh
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          # Gate scheduled / dispatched runs to 8 AM ET; manual runs skip the gate.
-          ENFORCE_ET_HOUR: ${{ (github.event_name == 'schedule' || github.event_name == 'repository_dispatch') && '8' || '' }}
+          STATE_FILE: ./state/daily-post.json
+          # Manual runs default to FORCE_POST=true (user explicitly clicked Run).
+          # Schedule / repository_dispatch use dedup: only the first to land posts.
+          FORCE_POST: ${{ github.event_name == 'workflow_dispatch' && (inputs.force_post || 'true') || 'false' }}
         run: ./scripts/Post-EconomicEvents.ps1
+
+      - name: Save daily-post state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: state/
+          key: daily-post-state-${{ github.run_id }}
