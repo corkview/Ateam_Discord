@@ -159,7 +159,6 @@ function Get-FomcActual {
 
     $pubDateStr = _Text $statement.pubDate
     $linkStr    = _Text $statement.link
-    $descStr    = _Text $statement.description
 
     $pubDate = [datetime]$pubDateStr
     $ageMin  = ([datetime]::UtcNow - $pubDate.ToUniversalTime()).TotalMinutes
@@ -247,6 +246,7 @@ function Get-JoblessClaimsActual {
 
     @{
         Group       = 'JoblessClaims'
+        DisplayName = 'Jobless Claims'
         Emoji       = ':briefcase:'
         PeriodLabel = "Week ending $($latestDate.ToString('MMM d, yyyy'))"
         Lines       = @(
@@ -268,6 +268,7 @@ function Get-RetailSalesActual {
 
     @{
         Group       = 'RetailSales'
+        DisplayName = 'Retail Sales'
         Emoji       = ':shopping_cart:'
         PeriodLabel = $latestDate.ToString('MMMM yyyy')
         Lines       = @(

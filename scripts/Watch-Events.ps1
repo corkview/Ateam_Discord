@@ -241,7 +241,8 @@ function Invoke-WatcherTick {
         catch { Write-Warning "Actuals fetcher '$($a.fetcher)' failed: $_"; continue }
 
         if ($result) {
-            $content = "$($result.Emoji) **$($result.Group) Release — $($result.PeriodLabel)**`n" + ($result.Lines -join "`n")
+            $name    = if ($result.DisplayName) { $result.DisplayName } else { $result.Group }
+            $content = "$($result.Emoji) **$name Release — $($result.PeriodLabel)**`n" + ($result.Lines -join "`n")
             $payload = @{
                 content          = $content
                 allowed_mentions = @{ parse = @() }
