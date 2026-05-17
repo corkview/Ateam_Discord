@@ -1,13 +1,18 @@
 <#
 .SYNOPSIS
     Fetches real release values from official agency sources (BLS, Federal
-    Reserve) and returns structured results for posting to Discord.
+    Reserve, FRED) and returns structured results for posting to Discord.
 
 .DESCRIPTION
     Dot-source this file from Watch-Events.ps1. It exposes:
-      - Get-CpiActual   (BLS)
-      - Get-NfpActual   (BLS)
-      - Get-FomcActual  (Federal Reserve RSS)
+      - Get-CpiActual            (BLS)
+      - Get-NfpActual            (BLS)
+      - Get-FomcActual           (Federal Reserve RSS)
+      - Get-JoblessClaimsActual  (FRED)
+      - Get-RetailSalesActual    (FRED)
+      - Get-PceActual            (FRED)
+      - Get-PpiActual            (FRED)
+      - Get-GdpActual            (FRED)
       - Find-ActualEntry  — maps an FF event title to a registry entry
 
     Each fetcher returns:
@@ -187,6 +192,160 @@ function Get-FomcActual {
     }
 }
 
+# --- FRED helper --------------------------------------------------
+$script:FredEndpoint = 'https://api.stlouisfed.org/fred/series/observations'
+
+function Invoke-FredSeries {
+    param(
+        [Parameter(Mandatory)][string]$SeriesId,
+        [int]$Limit = 24,
+        [string]$ApiKey = $env:FRED_API_KEY
+    )
+    if (-not $ApiKey) { throw "FRED_API_KEY is not set." }
+    $url = "$script:FredEndpoint" + "?series_id=$SeriesId&api_key=$ApiKey&file_type=json&sort_order=desc&limit=$Limit"
+    $r = Invoke-RestMethod -Uri $url -Method Get
+    @($r.observations | Where-Object { $_.value -ne '.' })
+}
+
+function Get-FredMonthlyMetrics($Observations) {
+    $latest     = $Observations[0]
+    $prev       = $Observations[1]
+    $latestDate = [datetime]$latest.date
+    $yearAgo    = $Observations | Where-Object {
+        $d = [datetime]$_.date
+        $d.Year -eq ($latestDate.Year - 1) -and $d.Month -eq $latestDate.Month
+    } | Select-Object -First 1
+
+    @{
+        Date  = $latestDate
+        Value = [double]$latest.value
+        Mom   = Format-Pct ([double]$latest.value) ([double]$prev.value)
+        Yoy   = if ($yearAgo) { Format-Pct ([double]$latest.value) ([double]$yearAgo.value) } else { 'n/a' }
+    }
+}
+
+function Test-FredMonthlyIsFresh($latestDate, $expected) {
+    $latestMonthStr = "M{0:D2}" -f $latestDate.Month
+    return ($latestDate.Year -eq [int]$expected.Year -and $latestMonthStr -eq $expected.Period)
+}
+
+# --- Initial Jobless Claims (weekly, Thu 8:30 AM ET) -------------
+function Get-JoblessClaimsActual {
+    [CmdletBinding()] param()
+    $obs = Invoke-FredSeries -SeriesId 'ICSA' -Limit 4
+    if (-not $obs -or $obs.Count -lt 2) { return $null }
+
+    $latest     = $obs[0]
+    $prev       = $obs[1]
+    $latestDate = [datetime]$latest.date
+    $daysOld    = ([datetime]::UtcNow.Date - $latestDate.Date).TotalDays
+    if ($daysOld -gt 7) { return $null }
+
+    $latestVal  = [int]$latest.value
+    $prevVal    = [int]$prev.value
+    $changeK    = "{0:+0;-0;0}K" -f (($latestVal - $prevVal) / 1000.0)
+
+    @{
+        Group       = 'JoblessClaims'
+        Emoji       = ':briefcase:'
+        PeriodLabel = "Week ending $($latestDate.ToString('MMM d, yyyy'))"
+        Lines       = @(
+            "**Initial Claims**  $($latestVal.ToString('N0'))  ($changeK vs prev $($prevVal.ToString('N0')))"
+        )
+    }
+}
+
+# --- Retail Sales (monthly, ~mid-month 8:30 AM ET) ---------------
+function Get-RetailSalesActual {
+    [CmdletBinding()] param()
+    $expected = Get-ExpectedPriorMonth
+    $obs      = Invoke-FredSeries -SeriesId 'RSAFS' -Limit 24
+    if (-not $obs -or $obs.Count -lt 13) { return $null }
+
+    $latestDate = [datetime]$obs[0].date
+    if (-not (Test-FredMonthlyIsFresh $latestDate $expected)) { return $null }
+    $m = Get-FredMonthlyMetrics $obs
+
+    @{
+        Group       = 'RetailSales'
+        Emoji       = ':shopping_cart:'
+        PeriodLabel = $latestDate.ToString('MMMM yyyy')
+        Lines       = @(
+            "**Retail Sales**  m/m $($m.Mom)   y/y $($m.Yoy)"
+        )
+    }
+}
+
+# --- PCE (monthly, late month 8:30 AM ET) ------------------------
+function Get-PceActual {
+    [CmdletBinding()] param()
+    $expected = Get-ExpectedPriorMonth
+    $head     = Invoke-FredSeries -SeriesId 'PCEPI'    -Limit 24
+    $core     = Invoke-FredSeries -SeriesId 'PCEPILFE' -Limit 24
+    if (-not $head -or $head.Count -lt 13) { return $null }
+
+    $latestDate = [datetime]$head[0].date
+    if (-not (Test-FredMonthlyIsFresh $latestDate $expected)) { return $null }
+    $h = Get-FredMonthlyMetrics $head
+    $c = Get-FredMonthlyMetrics $core
+
+    @{
+        Group       = 'PCE'
+        Emoji       = ':chart_with_upwards_trend:'
+        PeriodLabel = $latestDate.ToString('MMMM yyyy')
+        Lines       = @(
+            "**Headline**  m/m $($h.Mom)   y/y $($h.Yoy)"
+            "**Core**      m/m $($c.Mom)   y/y $($c.Yoy)"
+        )
+    }
+}
+
+# --- PPI (monthly, ~mid-month 8:30 AM ET) ------------------------
+function Get-PpiActual {
+    [CmdletBinding()] param()
+    $expected = Get-ExpectedPriorMonth
+    $obs      = Invoke-FredSeries -SeriesId 'PPIFIS' -Limit 24
+    if (-not $obs -or $obs.Count -lt 13) { return $null }
+
+    $latestDate = [datetime]$obs[0].date
+    if (-not (Test-FredMonthlyIsFresh $latestDate $expected)) { return $null }
+    $m = Get-FredMonthlyMetrics $obs
+
+    @{
+        Group       = 'PPI'
+        Emoji       = ':factory:'
+        PeriodLabel = $latestDate.ToString('MMMM yyyy')
+        Lines       = @(
+            "**PPI Final Demand**  m/m $($m.Mom)   y/y $($m.Yoy)"
+        )
+    }
+}
+
+# --- GDP (quarterly, 8:30 AM ET) ---------------------------------
+function Get-GdpActual {
+    [CmdletBinding()] param()
+    # A191RL1Q225SBEA = Real GDP, % change from preceding period, annual rate, SA — the headline number.
+    $obs = Invoke-FredSeries -SeriesId 'A191RL1Q225SBEA' -Limit 8
+    if (-not $obs -or $obs.Count -lt 1) { return $null }
+
+    $latestDate = [datetime]$obs[0].date
+    $daysOld    = ([datetime]::UtcNow.Date - $latestDate.Date).TotalDays
+    if ($daysOld -gt 120) { return $null }   # quarterly; revisions land within 4 months
+
+    $qNum   = [int][math]::Ceiling($latestDate.Month / 3.0)
+    $qLabel = "Q$qNum $($latestDate.Year)"
+    $gdpStr = "{0:+0.0;-0.0;0.0}%" -f ([double]$obs[0].value)
+
+    @{
+        Group       = 'GDP'
+        Emoji       = ':chart_with_upwards_trend:'
+        PeriodLabel = $qLabel
+        Lines       = @(
+            "**Real GDP (annualized)**  $gdpStr"
+        )
+    }
+}
+
 # --- Registry: FF event title → group + fetcher -------------------
 $script:ActualRegistry = @(
     # CPI
@@ -202,6 +361,24 @@ $script:ActualRegistry = @(
     @{ Pattern = '^Federal Funds Rate$';           Group = 'FOMC'; Fetcher = 'Get-FomcActual' }
     @{ Pattern = '^FOMC Statement$';               Group = 'FOMC'; Fetcher = 'Get-FomcActual' }
     @{ Pattern = 'FOMC Economic Projections';      Group = 'FOMC'; Fetcher = 'Get-FomcActual' }
+    # Initial Jobless Claims
+    @{ Pattern = '^Unemployment Claims$';          Group = 'JoblessClaims'; Fetcher = 'Get-JoblessClaimsActual' }
+    @{ Pattern = 'Initial Jobless Claims';         Group = 'JoblessClaims'; Fetcher = 'Get-JoblessClaimsActual' }
+    # Retail Sales
+    @{ Pattern = '^Retail Sales m/m$';             Group = 'RetailSales'; Fetcher = 'Get-RetailSalesActual' }
+    @{ Pattern = '^Core Retail Sales m/m$';        Group = 'RetailSales'; Fetcher = 'Get-RetailSalesActual' }
+    # PCE
+    @{ Pattern = 'PCE Price Index m/m';            Group = 'PCE'; Fetcher = 'Get-PceActual' }
+    @{ Pattern = 'Core PCE Price Index m/m';       Group = 'PCE'; Fetcher = 'Get-PceActual' }
+    @{ Pattern = 'PCE Price Index y/y';            Group = 'PCE'; Fetcher = 'Get-PceActual' }
+    # PPI
+    @{ Pattern = '^PPI m/m$';                      Group = 'PPI'; Fetcher = 'Get-PpiActual' }
+    @{ Pattern = '^Core PPI m/m$';                 Group = 'PPI'; Fetcher = 'Get-PpiActual' }
+    # GDP
+    @{ Pattern = 'GDP q/q';                        Group = 'GDP'; Fetcher = 'Get-GdpActual' }
+    @{ Pattern = 'Advance GDP';                    Group = 'GDP'; Fetcher = 'Get-GdpActual' }
+    @{ Pattern = 'Prelim GDP';                     Group = 'GDP'; Fetcher = 'Get-GdpActual' }
+    @{ Pattern = 'Final GDP';                      Group = 'GDP'; Fetcher = 'Get-GdpActual' }
 )
 
 function Find-ActualEntry([string]$eventTitle) {
