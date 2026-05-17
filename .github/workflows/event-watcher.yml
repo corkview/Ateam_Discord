@@ -55,6 +55,8 @@ jobs:
         shell: pwsh
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          BLS_API_KEY:         ${{ secrets.BLS_API_KEY }}
+          FRED_API_KEY:        ${{ secrets.FRED_API_KEY }}
           STATE_FILE: ./state/watcher.json
           # Scheduled / dispatched runs loop for ~5.5 hr. Manual runs use the input (default 0).
           LOOP_DURATION_MINUTES: ${{ (github.event_name == 'schedule' || github.event_name == 'repository_dispatch') && '325' || inputs.loop_minutes }}
