@@ -29,6 +29,7 @@ if (-not $WebhookUrl) { throw "DISCORD_WEBHOOK_URL is not set." }
 
 # Dot-source fetchers for actuals (CPI/NFP/FOMC) -------------------
 . (Join-Path $PSScriptRoot 'Fetch-Actuals.ps1')
+. (Join-Path $PSScriptRoot 'Market-Calendar.ps1')
 
 # Tuning ------------------------------------------------------------
 $WarnWithinSec    = 180   # post a warning if event is within 3 min from now
@@ -46,7 +47,7 @@ $EtZone = [System.TimeZoneInfo]::FindSystemTimeZoneById(
     $(if ($IsWindows -or $env:OS -eq 'Windows_NT') { 'Eastern Standard Time' } else { 'America/New_York' })
 )
 
-function New-EmptyState { @{ date = $null; events = @(); warnings = @(); actuals = @() } }
+function New-EmptyState { @{ date = $null; events = @(); warnings = @(); actuals = @(); holiday_notified_date = $null } }
 function Get-EventKey($title, $eventUtcIso) { "$title|$eventUtcIso" }
 
 function Invoke-WatcherTick {
@@ -80,6 +81,7 @@ function Invoke-WatcherTick {
                         status          = [string]$_.status
                     }
                 })
+                holiday_notified_date = [string]$loaded.holiday_notified_date
             }
         }
         catch {
@@ -130,14 +132,20 @@ function Invoke-WatcherTick {
             $events += @{ title = $r.Title; impact = $r.Impact; event_utc = $eventUtc.ToString('o') }
         }
 
-        # --- Inject synthetic market session events (always included, regardless of impact filter) ---
+        # --- Inject synthetic market session events (skipped on market holidays) ---
         function _ToUtcIso([datetime]$etTime, $zone) {
             [System.TimeZoneInfo]::ConvertTimeToUtc(
                 [datetime]::SpecifyKind($etTime, [DateTimeKind]::Unspecified), $zone).ToString('o')
         }
-        $events += @{ title = 'US Market Open';  impact = 'MarketSession'; event_utc = (_ToUtcIso $nowEt.Date.AddHours(9).AddMinutes(30)  $EtZone) }
-        $events += @{ title = 'MOC Imbalance';   impact = 'MarketSession'; event_utc = (_ToUtcIso $nowEt.Date.AddHours(15).AddMinutes(50) $EtZone) }
-        $events += @{ title = 'US Market Close'; impact = 'MarketSession'; event_utc = (_ToUtcIso $nowEt.Date.AddHours(16)                $EtZone) }
+        $holidayName = Get-MarketHoliday $nowEt.Date
+        if (-not $holidayName) {
+            $events += @{ title = 'US Market Open';  impact = 'MarketSession'; event_utc = (_ToUtcIso $nowEt.Date.AddHours(9).AddMinutes(30)  $EtZone) }
+            $events += @{ title = 'MOC Imbalance';   impact = 'MarketSession'; event_utc = (_ToUtcIso $nowEt.Date.AddHours(15).AddMinutes(50) $EtZone) }
+            $events += @{ title = 'US Market Close'; impact = 'MarketSession'; event_utc = (_ToUtcIso $nowEt.Date.AddHours(16)                $EtZone) }
+        }
+        else {
+            Write-Host "[$($nowEt.ToString('HH:mm:ss'))] Market holiday: $holidayName — skipping Open/MOC/Close."
+        }
 
         $state.date        = $todayEt
         $state.include_all = $includeAll
@@ -146,6 +154,22 @@ function Invoke-WatcherTick {
         $state.actuals     = @()
         $mode = if ($includeAll) { 'ALL impacts' } else { 'Med/High' }
         Write-Host "[$($nowEt.ToString('HH:mm:ss'))] Today has $($events.Count) USD event(s) ($mode)."
+    }
+
+    # --- Post holiday closure notice (once per holiday day) ---
+    $todayHoliday = Get-MarketHoliday $nowEt.Date
+    if ($todayHoliday -and $state.holiday_notified_date -ne $todayEt) {
+        $holidayPayload = @{
+            content          = ":classical_building: **US Markets Closed today in observance of $todayHoliday**"
+            allowed_mentions = @{ parse = @() }
+        } | ConvertTo-Json -Depth 5 -Compress
+        try {
+            Invoke-RestMethod -Uri $WebhookUrl -Method Post -ContentType 'application/json; charset=utf-8' -Body $holidayPayload | Out-Null
+            $state.holiday_notified_date = $todayEt
+            Write-Host "[$($nowEt.ToString('HH:mm:ss'))] Posted holiday closure notice: $todayHoliday"
+        } catch {
+            Write-Warning "Failed to post holiday notice: $_"
+        }
     }
 
     # --- Walk events; decide post / delete / skip ---

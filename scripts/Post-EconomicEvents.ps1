@@ -40,6 +40,10 @@ $EtZone = [System.TimeZoneInfo]::FindSystemTimeZoneById(
 $NowEt   = [System.TimeZoneInfo]::ConvertTimeFromUtc([datetime]::UtcNow, $EtZone)
 $TodayEt = $NowEt.Date
 
+# --- Dot-source the market calendar (for holiday awareness) --------
+. (Join-Path $PSScriptRoot 'Market-Calendar.ps1')
+$TodayHoliday = Get-MarketHoliday $TodayEt
+
 # --- Dedup: skip if we already posted today ---
 # Multiple schedulers (GH cron + Cloudflare) may both fire today, and either
 # may execute late. We post on the first to land and skip subsequent triggers.
@@ -160,8 +164,13 @@ $embed = @{
     fields = $fields
 }
 
+if ($TodayHoliday) {
+    $embed.description = ":classical_building: **US Markets Closed today in observance of $TodayHoliday**"
+}
+
 if ($todays.Count -eq 0) {
-    $embed.description = 'No scheduled economic releases.'
+    $noEvents = 'No scheduled economic releases.'
+    $embed.description = if ($embed.description) { "$($embed.description)`n$noEvents" } else { $noEvents }
     $embed.Remove('fields')
 }
 
