@@ -164,9 +164,34 @@ $embed = @{
     fields = $fields
 }
 
+# --- Build description: today's closure (if any) + upcoming-closure lookahead ---
+$descParts = @()
+
 if ($TodayHoliday) {
-    $embed.description = ":classical_building: **US Markets Closed today in observance of $TodayHoliday**"
+    $descParts += ":classical_building: **US Markets Closed today in observance of $TodayHoliday**"
 }
+
+# Look ahead 5 days for upcoming closures.
+$LookaheadDays  = 5
+$upcomingBlocks = @()
+for ($i = 1; $i -le $LookaheadDays; $i++) {
+    $checkDate = $TodayEt.AddDays($i)
+    $h = Get-MarketHoliday $checkDate
+    if (-not $h) { continue }
+    $f = Get-FuturesHolidaySchedule $checkDate
+    $futuresStatus = if ($f -and $f.EarlyCloseEt) {
+        $fh, $fm = $f.EarlyCloseEt.Split(':')
+        $cT = (Get-Date 0).AddHours([int]$fh).AddMinutes([int]$fm)
+        "Futures early close $($cT.ToString('h:mm tt')) ET"
+    } elseif ($f -and $f.Note) {
+        $f.Note
+    } else { 'Futures status unknown' }
+    $dayLabel = $checkDate.ToString('ddd MMM d')
+    $upcomingBlocks += ":warning: **$dayLabel — $h**`n   Equity closed | $futuresStatus"
+}
+if ($upcomingBlocks.Count) { $descParts += ($upcomingBlocks -join "`n") }
+
+if ($descParts.Count) { $embed.description = ($descParts -join "`n") }
 
 if ($todays.Count -eq 0) {
     $noEvents = 'No scheduled economic releases.'
