@@ -217,15 +217,19 @@ function Invoke-WatcherTick {
                     }
                     default   { ':yellow_circle:' }
                 }
-                $content = if ($e.impact -eq 'MarketSession') {
+                # @here ping on Med/High news events only (skip MarketSession and Low/whitelist).
+                $isNewsAlert = ($e.impact -eq 'High' -or $e.impact -eq 'Medium')
+                $prefix      = if ($isNewsAlert) { '@here ' } else { '' }
+                $content     = if ($e.impact -eq 'MarketSession') {
                     "$dot **$($e.title)** <t:$unix`:R>"
                 } else {
-                    "$dot **$($e.title)** releases <t:$unix`:R>"
+                    "$prefix$dot **$($e.title)** releases <t:$unix`:R>"
                 }
+                $mentions    = if ($isNewsAlert) { @{ parse = @('everyone') } } else { @{ parse = @() } }
 
                 $payload = @{
                     content          = $content
-                    allowed_mentions = @{ parse = @() }
+                    allowed_mentions = $mentions
                 } | ConvertTo-Json -Depth 5 -Compress
 
                 $postUrl  = "$WebhookUrl" + "?wait=true"
