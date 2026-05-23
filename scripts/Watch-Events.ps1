@@ -144,7 +144,15 @@ function Invoke-WatcherTick {
             $events += @{ title = 'US Market Close'; impact = 'MarketSession'; event_utc = (_ToUtcIso $nowEt.Date.AddHours(16)                $EtZone) }
         }
         else {
-            Write-Host "[$($nowEt.ToString('HH:mm:ss'))] Market holiday: $holidayName — skipping Open/MOC/Close."
+            Write-Host "[$($nowEt.ToString('HH:mm:ss'))] Market holiday: $holidayName — skipping equity Open/MOC/Close."
+            # If futures still trade with an early close today, inject Futures Early Close for a T-3 warning.
+            $futSchedule = Get-FuturesHolidaySchedule $nowEt.Date
+            if ($futSchedule -and $futSchedule.EarlyCloseEt) {
+                $parts = $futSchedule.EarlyCloseEt.Split(':')
+                $closeEt = $nowEt.Date.AddHours([int]$parts[0]).AddMinutes([int]$parts[1])
+                $events += @{ title = 'Futures Early Close'; impact = 'MarketSession'; event_utc = (_ToUtcIso $closeEt $EtZone) }
+                Write-Host "[$($nowEt.ToString('HH:mm:ss'))] Injected Futures Early Close at $($futSchedule.EarlyCloseEt) ET."
+            }
         }
 
         $state.date        = $todayEt
@@ -159,8 +167,22 @@ function Invoke-WatcherTick {
     # --- Post holiday closure notice (once per holiday day) ---
     $todayHoliday = Get-MarketHoliday $nowEt.Date
     if ($todayHoliday -and $state.holiday_notified_date -ne $todayEt) {
+        $todayFutures = Get-FuturesHolidaySchedule $nowEt.Date
+        $futuresLine = if ($todayFutures) {
+            if ($todayFutures.EarlyCloseEt) {
+                $h, $m = $todayFutures.EarlyCloseEt.Split(':')
+                $closeEt = (Get-Date 0).AddHours([int]$h).AddMinutes([int]$m)
+                "Futures early close $($closeEt.ToString('h:mm tt')) ET"
+            } else {
+                $todayFutures.Note
+            }
+        } else { $null }
+
+        $content = ":classical_building: **US Markets Closed today in observance of $todayHoliday**"
+        if ($futuresLine) { $content += "`n   $futuresLine" }
+
         $holidayPayload = @{
-            content          = ":classical_building: **US Markets Closed today in observance of $todayHoliday**"
+            content          = $content
             allowed_mentions = @{ parse = @() }
         } | ConvertTo-Json -Depth 5 -Compress
         try {

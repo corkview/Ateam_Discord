@@ -8,6 +8,43 @@
     markets are actually closed), not calendar dates of the holiday.
 #>
 
+# Futures (CME equity index) schedule on US holidays.
+# Returns @{ EarlyCloseEt = 'HH:mm' | $null; Note = string | $null }
+# - EarlyCloseEt = "13:00" means futures trade but close at 1:00 PM ET
+# - EarlyCloseEt = $null means futures fully closed that day
+function Get-FuturesHolidaySchedule {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][datetime]$DateEt)
+
+    $iso = $DateEt.ToString('yyyy-MM-dd')
+    $schedule = @{
+        # 2026
+        '2026-01-01' = @{ EarlyCloseEt = $null;  Note = 'Futures closed' }
+        '2026-01-19' = @{ EarlyCloseEt = '13:00'; Note = $null }
+        '2026-02-16' = @{ EarlyCloseEt = '13:00'; Note = $null }
+        '2026-04-03' = @{ EarlyCloseEt = $null;  Note = 'Futures closed (Good Friday)' }
+        '2026-05-25' = @{ EarlyCloseEt = '13:00'; Note = $null }
+        '2026-06-19' = @{ EarlyCloseEt = '13:00'; Note = $null }
+        '2026-07-03' = @{ EarlyCloseEt = '13:00'; Note = $null }
+        '2026-09-07' = @{ EarlyCloseEt = '13:00'; Note = $null }
+        '2026-11-26' = @{ EarlyCloseEt = '13:00'; Note = $null }
+        '2026-12-25' = @{ EarlyCloseEt = $null;  Note = 'Futures closed' }
+        # 2027
+        '2027-01-01' = @{ EarlyCloseEt = $null;  Note = 'Futures closed' }
+        '2027-01-18' = @{ EarlyCloseEt = '13:00'; Note = $null }
+        '2027-02-15' = @{ EarlyCloseEt = '13:00'; Note = $null }
+        '2027-03-26' = @{ EarlyCloseEt = $null;  Note = 'Futures closed (Good Friday)' }
+        '2027-05-31' = @{ EarlyCloseEt = '13:00'; Note = $null }
+        '2027-06-18' = @{ EarlyCloseEt = '13:00'; Note = $null }
+        '2027-07-05' = @{ EarlyCloseEt = '13:00'; Note = $null }
+        '2027-09-06' = @{ EarlyCloseEt = '13:00'; Note = $null }
+        '2027-11-25' = @{ EarlyCloseEt = '13:00'; Note = $null }
+        '2027-12-24' = @{ EarlyCloseEt = $null;  Note = 'Futures closed' }
+    }
+    if ($schedule.ContainsKey($iso)) { return $schedule[$iso] }
+    return $null
+}
+
 function Get-MarketHoliday {
     [CmdletBinding()]
     param([Parameter(Mandatory)][datetime]$DateEt)
