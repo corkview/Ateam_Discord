@@ -1,0 +1,26 @@
+name: Sunday Week Ahead
+
+# Fires Sunday ~5:55 PM ET via Cloudflare repository_dispatch.
+# Posts the week's USD Med/High events + closure notices, then waits to
+# delete an ephemeral "Futures Open" warning 1 min after 6:00 PM ET.
+
+on:
+  repository_dispatch:
+    types: [week-ahead]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 80   # script sleeps ~5-65 min depending on DST; cap well above
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Post week-ahead + futures-open warning
+        shell: pwsh
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: ./scripts/Post-WeekAhead.ps1
