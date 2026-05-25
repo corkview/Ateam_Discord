@@ -164,35 +164,8 @@ function Invoke-WatcherTick {
         Write-Host "[$($nowEt.ToString('HH:mm:ss'))] Today has $($events.Count) USD event(s) ($mode)."
     }
 
-    # --- Post holiday closure notice (once per holiday day) ---
-    $todayHoliday = Get-MarketHoliday $nowEt.Date
-    if ($todayHoliday -and $state.holiday_notified_date -ne $todayEt) {
-        $todayFutures = Get-FuturesHolidaySchedule $nowEt.Date
-        $futuresLine = if ($todayFutures) {
-            if ($todayFutures.EarlyCloseEt) {
-                $h, $m = $todayFutures.EarlyCloseEt.Split(':')
-                $closeEt = (Get-Date 0).AddHours([int]$h).AddMinutes([int]$m)
-                "Futures early close $($closeEt.ToString('h:mm tt')) ET"
-            } else {
-                $todayFutures.Note
-            }
-        } else { $null }
-
-        $content = ":classical_building: **US Markets Closed today in observance of $todayHoliday**"
-        if ($futuresLine) { $content += "`n   $futuresLine" }
-
-        $holidayPayload = @{
-            content          = $content
-            allowed_mentions = @{ parse = @() }
-        } | ConvertTo-Json -Depth 5 -Compress
-        try {
-            Invoke-RestMethod -Uri $WebhookUrl -Method Post -ContentType 'application/json; charset=utf-8' -Body $holidayPayload | Out-Null
-            $state.holiday_notified_date = $todayEt
-            Write-Host "[$($nowEt.ToString('HH:mm:ss'))] Posted holiday closure notice: $todayHoliday"
-        } catch {
-            Write-Warning "Failed to post holiday notice: $_"
-        }
-    }
+    # Holiday closure notice is now handled by the morning post (Post-EconomicEvents.ps1).
+    # Watcher only handles the Futures Early Close synthetic event injection on holidays.
 
     # --- Walk events; decide post / delete / skip ---
     foreach ($e in $state.events) {

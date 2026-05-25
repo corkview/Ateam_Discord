@@ -70,6 +70,8 @@ $rows    = $csvText | ConvertFrom-Csv
 # --- Filter to today's USD events -----------------------------------
 $todays = foreach ($r in $rows) {
     if ($r.Country -ne $Country) { continue }
+    # Skip FF's "Bank Holiday" rows — redundant with our own closure line.
+    if ($r.Impact -eq 'Holiday') { continue }
 
     # Date is MM-DD-YYYY in the FF feed.
     $eventDate = [datetime]::MinValue
@@ -168,7 +170,18 @@ $embed = @{
 $descParts = @()
 
 if ($TodayHoliday) {
-    $descParts += ":classical_building: **US Markets Closed today in observance of $TodayHoliday**"
+    $futuresLine = ''
+    $todayFutures = Get-FuturesHolidaySchedule $TodayEt
+    if ($todayFutures) {
+        if ($todayFutures.EarlyCloseEt) {
+            $fh, $fm = $todayFutures.EarlyCloseEt.Split(':')
+            $cT = (Get-Date 0).AddHours([int]$fh).AddMinutes([int]$fm)
+            $futuresLine = " | Futures early close $($cT.ToString('h:mm tt')) ET"
+        } elseif ($todayFutures.Note) {
+            $futuresLine = " | $($todayFutures.Note)"
+        }
+    }
+    $descParts += ":classical_building: **US Markets Closed today in observance of $TodayHoliday**$futuresLine"
 }
 
 # Look ahead 5 days for upcoming closures.
