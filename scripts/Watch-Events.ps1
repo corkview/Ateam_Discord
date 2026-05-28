@@ -49,6 +49,19 @@ $EtZone = [System.TimeZoneInfo]::FindSystemTimeZoneById(
 
 function New-EmptyState { @{ date = $null; events = @(); warnings = @(); actuals = @(); holiday_notified_date = $null } }
 function Get-EventKey($title, $eventUtcIso) { "$title|$eventUtcIso" }
+function Get-ImpactDot($impact, $title) {
+    switch ($impact) {
+        'High'   { ':red_circle:' }
+        'Medium' { ':orange_circle:' }
+        'MarketSession' {
+            switch -Regex ($title) {
+                'MOC'   { ':alarm_clock:' }
+                default { ':bell:' }
+            }
+        }
+        default { ':yellow_circle:' }
+    }
+}
 
 function Invoke-WatcherTick {
     $nowUtc  = [datetime]::UtcNow
@@ -167,80 +180,113 @@ function Invoke-WatcherTick {
     # Holiday closure notice is now handled by the morning post (Post-EconomicEvents.ps1).
     # Watcher only handles the Futures Early Close synthetic event injection on holidays.
 
-    # --- Walk events; decide post / delete / skip ---
+    # Lookup: event_key -> event (used by the delete phase below).
+    $eventByKey = @{}
+    foreach ($e in $state.events) { $eventByKey[(Get-EventKey $e.title $e.event_utc)] = $e }
+
+    # Group events by release time so simultaneous releases share ONE warning (one @here).
+    $releaseGroups = @{}
     foreach ($e in $state.events) {
-        $key       = Get-EventKey $e.title $e.event_utc
-        $eventUtc  = [datetime]::Parse($e.event_utc, [cultureinfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind)
+        $k = [string]$e.event_utc
+        if ($releaseGroups.ContainsKey($k)) { $releaseGroups[$k] = $releaseGroups[$k] + ,$e }
+        else { $releaseGroups[$k] = @($e) }
+    }
+
+    # --- POST phase: one combined warning per release-time group ---
+    foreach ($k in @($releaseGroups.Keys)) {
+        $members   = @($releaseGroups[$k])
+        $eventUtc  = [datetime]::Parse($k, [cultureinfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind)
         $secsUntil = ($eventUtc - $nowUtc).TotalSeconds
-        $warning   = $state.warnings | Where-Object { $_.event_key -eq $key } | Select-Object -First 1
 
-        if (-not $warning) {
-            if ($secsUntil -gt 0 -and $secsUntil -le $WarnWithinSec) {
-                $unix    = [int64]([datetimeoffset]$eventUtc).ToUnixTimeSeconds()
-                $dot = switch ($e.impact) {
-                    'High'    { ':red_circle:' }
-                    'Medium'  { ':orange_circle:' }
-                    'MarketSession' {
-                        switch -Regex ($e.title) {
-                            'Open'  { ':bell:' }
-                            'MOC'   { ':alarm_clock:' }
-                            'Close' { ':bell:' }
-                            default { ':bell:' }
-                        }
-                    }
-                    default   { ':yellow_circle:' }
-                }
-                # @here ping on Med/High news events only (skip MarketSession and Low/whitelist).
-                $isNewsAlert = ($e.impact -eq 'High' -or $e.impact -eq 'Medium')
-                $prefix      = if ($isNewsAlert) { '@here ' } else { '' }
-                $content     = if ($e.impact -eq 'MarketSession') {
-                    "$dot **$($e.title)** <t:$unix`:R>"
+        # Skip if any member already has a warning (group was already posted).
+        $memberKeys = @($members | ForEach-Object { Get-EventKey $_.title $_.event_utc })
+        if ($state.warnings | Where-Object { $memberKeys -contains $_.event_key }) { continue }
+
+        if ($secsUntil -gt 0 -and $secsUntil -le $WarnWithinSec) {
+            $unix    = [int64]([datetimeoffset]$eventUtc).ToUnixTimeSeconds()
+            $hasNews = @($members | Where-Object { $_.impact -eq 'High' -or $_.impact -eq 'Medium' }).Count -gt 0
+            $prefix  = if ($hasNews) { '@here ' } else { '' }
+
+            if ($members.Count -eq 1) {
+                $m   = $members[0]
+                $dot = Get-ImpactDot $m.impact $m.title
+                $content = if ($m.impact -eq 'MarketSession') {
+                    "$dot **$($m.title)** <t:$unix`:R>"
                 } else {
-                    "$prefix$dot **$($e.title)** releases <t:$unix`:R>"
+                    "$prefix$dot **$($m.title)** releases <t:$unix`:R>"
                 }
-                $mentions    = if ($isNewsAlert) { @{ parse = @('everyone') } } else { @{ parse = @() } }
+            }
+            else {
+                # Multiple simultaneous releases: one @here, one timestamp, one line per event.
+                $lines   = foreach ($m in $members) { "$(Get-ImpactDot $m.impact $m.title) **$($m.title)**" }
+                $content = "$prefix**News releasing <t:$unix`:R>**`n" + ($lines -join "`n")
+            }
 
-                $payload = @{
-                    content          = $content
-                    allowed_mentions = $mentions
-                } | ConvertTo-Json -Depth 5 -Compress
+            $mentions = if ($hasNews) { @{ parse = @('everyone') } } else { @{ parse = @() } }
+            $payload  = @{
+                content          = $content
+                allowed_mentions = $mentions
+            } | ConvertTo-Json -Depth 5 -Compress
 
-                $postUrl  = "$WebhookUrl" + "?wait=true"
-                $response = Invoke-RestMethod -Uri $postUrl -Method Post -ContentType 'application/json; charset=utf-8' -Body $payload
+            $postUrl  = "$WebhookUrl" + "?wait=true"
+            $response = Invoke-RestMethod -Uri $postUrl -Method Post -ContentType 'application/json; charset=utf-8' -Body $payload
 
+            foreach ($m in $members) {
                 $state.warnings += @{
-                    event_key  = $key
+                    event_key  = (Get-EventKey $m.title $m.event_utc)
                     message_id = $response.id
                     deleted    = $false
                 }
-                Write-Host "[$($nowEt.ToString('HH:mm:ss'))] Posted warning: $($e.title) (in $([int]$secsUntil)s)"
             }
+            $titles = ($members | ForEach-Object { $_.title }) -join ', '
+            Write-Host "[$($nowEt.ToString('HH:mm:ss'))] Posted warning ($($members.Count)): $titles (in $([int]$secsUntil)s)"
         }
-        elseif (-not $warning.deleted) {
-            if ($secsUntil -lt -$DeleteAfterSec) {
-                $deleteUrl = "$WebhookUrl/messages/$($warning.message_id)"
-                try {
-                    Invoke-RestMethod -Uri $deleteUrl -Method Delete | Out-Null
-                    Write-Host "[$($nowEt.ToString('HH:mm:ss'))] Deleted warning: $($e.title)"
-                }
-                catch {
-                    Write-Warning "Delete failed for $($e.title): $_"
-                }
-                $warning.deleted = $true
+    }
 
-                # Enroll for actuals follow-up if this event is in the registry.
-                $entry = Find-ActualEntry $e.title
-                if ($entry) {
-                    $existing = $state.actuals | Where-Object { $_.group -eq $entry.Group } | Select-Object -First 1
-                    if (-not $existing) {
-                        $state.actuals += @{
-                            group           = $entry.Group
-                            fetcher         = $entry.Fetcher
-                            first_event_utc = $e.event_utc
-                            status          = 'pending'
-                        }
-                        Write-Host "[$($nowEt.ToString('HH:mm:ss'))] Enrolled $($entry.Group) for actuals follow-up."
+    # --- DELETE phase: remove each warning message once, after its events pass; enroll actuals per event ---
+    $byMessage = @{}
+    foreach ($w in $state.warnings) {
+        if ($w.deleted) { continue }
+        $k = [string]$w.message_id
+        if ($byMessage.ContainsKey($k)) { $byMessage[$k] = $byMessage[$k] + ,$w }
+        else { $byMessage[$k] = @($w) }
+    }
+
+    foreach ($msgId in @($byMessage.Keys)) {
+        $warnRecs = @($byMessage[$msgId])
+        $evs      = @($warnRecs | ForEach-Object { $eventByKey[$_.event_key] } | Where-Object { $_ })
+        if (-not $evs.Count) { continue }
+
+        $maxUtc = [datetime]::MinValue
+        foreach ($e in $evs) {
+            $t = [datetime]::Parse($e.event_utc, [cultureinfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind)
+            if ($t -gt $maxUtc) { $maxUtc = $t }
+        }
+        if (($maxUtc - $nowUtc).TotalSeconds -ge -$DeleteAfterSec) { continue }
+
+        $deleteUrl = "$WebhookUrl/messages/$msgId"
+        try {
+            Invoke-RestMethod -Uri $deleteUrl -Method Delete | Out-Null
+            Write-Host "[$($nowEt.ToString('HH:mm:ss'))] Deleted warning: $(($evs | ForEach-Object { $_.title }) -join ', ')"
+        }
+        catch {
+            Write-Warning "Delete failed for message $msgId`: $_"
+        }
+        foreach ($w in $warnRecs) { $w.deleted = $true }
+
+        # Enroll each event for actuals follow-up if it is in the registry.
+        foreach ($e in $evs) {
+            $entry = Find-ActualEntry $e.title
+            if ($entry) {
+                $existing = $state.actuals | Where-Object { $_.group -eq $entry.Group } | Select-Object -First 1
+                if (-not $existing) {
+                    $state.actuals += @{
+                        group           = $entry.Group
+                        fetcher         = $entry.Fetcher
+                        first_event_utc = $e.event_utc
+                        status          = 'pending'
                     }
+                    Write-Host "[$($nowEt.ToString('HH:mm:ss'))] Enrolled $($entry.Group) for actuals follow-up."
                 }
             }
         }
